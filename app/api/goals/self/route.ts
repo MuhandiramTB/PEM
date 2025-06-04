@@ -1,3 +1,5 @@
+export const dynamic = "force-dynamic";
+
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { prisma } from '@/lib/prisma';
@@ -10,13 +12,31 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    // Fetch goals where the user is either the employee or the manager
+    // Fetch self-created goals (where employee is the creator)
     const goals = await prisma.goal.findMany({
       where: {
+        employeeId: session.user.id,
         OR: [
-          { employeeId: session.user.id },
-          { managerId: session.user.id }
-        ]
+          { managerId: null }, // No manager assigned
+          { managerId: session.user.id } // Self-managed
+        ],
+        status: { not: 'DELETED' }
+      },
+      include: {
+        employee: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        },
+        manager: {
+          select: {
+            id: true,
+            name: true,
+            email: true
+          }
+        }
       },
       orderBy: {
         createdAt: 'desc'
@@ -25,7 +45,7 @@ export async function GET() {
 
     return NextResponse.json({ goals });
   } catch (error) {
-    console.error('Error fetching goals:', error);
+    console.error('Error fetching self-created goals:', error);
     return NextResponse.json(
       { error: 'Failed to fetch goals' },
       { status: 500 }

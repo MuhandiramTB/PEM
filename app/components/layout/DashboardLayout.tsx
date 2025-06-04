@@ -21,7 +21,6 @@ import {
   BsChevronDown,
   BsBoxArrowRight,
   BsBuilding,
-  BsClock,
   BsSun,
   BsMoon,
   BsSearch,
@@ -35,42 +34,12 @@ interface DashboardLayoutProps {
   type: 'employee' | 'manager' | 'admin';
 }
 
-// Create a client-side only time display component
-const TimeDisplay = () => {
-  const [currentTime, setCurrentTime] = useState(new Date());
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTime(new Date());
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, []);
-
-  const formatDate = (date: Date) => {
-    const options: Intl.DateTimeFormatOptions = {
-      hour: 'numeric',
-      minute: 'numeric',
-      second: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric'
-    };
-    return date.toLocaleString('en-US', options);
-  };
-
-  return (
-    <div className="flex items-center space-x-2 text-sm text-gray-400">
-      <BsClock className="h-4 w-4" />
-      <span>{formatDate(currentTime)}</span>
-    </div>
-  );
-};
-
-// Use dynamic import with ssr disabled for the time display
-const ClientTimeDisplay = dynamic(() => Promise.resolve(TimeDisplay), {
-  ssr: false
-});
+interface Settings {
+  systemName: string;
+  timezone: string;
+  dateFormat: string;
+  timeFormat: string;
+}
 
 export default function DashboardLayout({ children, type }: DashboardLayoutProps) {
   const { data: session, status } = useSession();
@@ -78,7 +47,7 @@ export default function DashboardLayout({ children, type }: DashboardLayoutProps
   const pathname = usePathname();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
-  const [settings, setSettings] = useState({
+  const [settings, setSettings] = useState<Settings>({
     systemName: 'Performance Management System',
     timezone: 'UTC',
     dateFormat: 'MM/DD/YYYY',
@@ -110,20 +79,35 @@ export default function DashboardLayout({ children, type }: DashboardLayoutProps
   }, [isMobileMenuOpen]);
 
   useEffect(() => {
-    // Fetch system settings
     const fetchSettings = async () => {
       try {
-        const response = await fetch('/api/admin/settings');
-        if (response.ok) {
+        // Only fetch admin settings if user is an admin
+        if (type === 'admin') {
+          const response = await fetch('/api/admin/settings');
+          if (!response.ok) {
+            if (response.status === 401) {
+              console.log('Not authorized to access admin settings');
+              return;
+            }
+            throw new Error('Failed to fetch settings');
+          }
           const data = await response.json();
-          setSettings(data);
+          if (data && typeof data === 'object') {
+            setSettings(prev => ({
+              ...prev,
+              ...data
+            }));
+          }
         }
       } catch (error) {
         console.error('Error fetching settings:', error);
       }
     };
-    fetchSettings();
-  }, []);
+
+    if (status === 'authenticated') {
+      fetchSettings();
+    }
+  }, [type, status]);
 
   // Close user menu when clicking outside
   useEffect(() => {
@@ -144,28 +128,27 @@ export default function DashboardLayout({ children, type }: DashboardLayoutProps
       case 'employee':
         return [
           { href: '/dashboard/employee', icon: BsGrid, label: 'Dashboard' },
-          { href: '/dashboard/goals/create', icon: BsBullseye, label: 'Goal Setting' },
-          { href: '/self-rating', icon: BsStar, label: 'Self Rating' },
-          { href: '/feedback', icon: BsChat, label: 'Feedback' },
-          { href: '/reports', icon: BsBarChart, label: 'Reports' },
-          { href: '/performance-review', icon: BsPerson, label: 'Performance Review' },
+          { href: '/dashboard/employee/goals/create', icon: BsBullseye, label: 'Goals Create' },
+          { href: '/dashboard/employee/self-rating', icon: BsStar, label: 'Self Rating' },
+
         ];
       case 'manager':
         return [
           { href: '/dashboard/manager', icon: BsGrid, label: 'Dashboard' },
-          { href: '/approve-goals', icon: BsBullseye, label: 'Goal Approvals' },
-          { href: '/rate-employees', icon: BsStar, label: 'Manager Ratings' },
-          { href: '/dashboard/manager/goals/create', icon: BsBullseye, label: 'Goal Setting' },
+          { href: '/dashboard/manager/goals/approve-goals', icon: BsBullseye, label: 'Goal Approvals' },
+          { href: '/dashboard/manager/goals/setgoals', icon: BsBullseye, label: 'Set Goals ' },
+
+          { href: '/dashboard/manager/rate-employees', icon: BsStar, label: 'Manager Ratings' },
+          { href: '/dashboard/manager/goals/create', icon: BsBullseye, label: 'Goals Create' },
           { href: '/dashboard/manager/goals/self-ratings', icon: BsStar, label: 'Self Rating' },
-          { href: '/performance-reviews', icon: BsBarChart, label: 'Performance Reviews' },
-          { href: '/feedback', icon: BsChat, label: 'Feedback' },
+          
         ];
       case 'admin':
         return [
           { href: '/dashboard/admin', label: 'Dashboard', icon: BsGrid },
           { href: '/dashboard/admin/users', label: 'Users', icon: BsPeople },
+          { href: '/dashboard/admin/goals/', icon: BsBullseye, label: 'Set Goals ' },
           { href: '/dashboard/admin/settings', label: 'Settings', icon: BsGear },
-          { href: '/audit-logs', icon: BsClipboardData, label: 'Audit Logs' },
         ];
       default:
         return [];
@@ -176,10 +159,16 @@ export default function DashboardLayout({ children, type }: DashboardLayoutProps
   const portalTitle = type.charAt(0).toUpperCase() + type.slice(1) + ' Portal';
 
   const handleSignOut = async () => {
-    await signOut({
-      callbackUrl: '/login',
-      redirect: true
-    });
+    try {
+      await signOut({
+        callbackUrl: '/login',
+        redirect: true
+      });
+      router.push('/login');
+    } catch (error) {
+      console.error('Error signing out:', error);
+      router.push('/login');
+    }
   };
 
   return (
@@ -299,34 +288,40 @@ export default function DashboardLayout({ children, type }: DashboardLayoutProps
       {/* Header */}
       <header className="fixed top-0 right-0 left-0 h-16 bg-[#1a1c23] md:pl-64 z-20">
         <div className="flex items-center justify-between h-full px-4">
+          {/* Left side: Mobile menu, Logo, and System Name */}
           <div className="flex items-center space-x-4">
+            {/* Mobile menu button */}
             <button
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="md:hidden text-gray-400 hover:text-white"
+              className="text-gray-400 hover:text-white md:hidden"
               aria-label="Open menu"
             >
               <BsList className="w-6 h-6" />
             </button>
-            <div className="hidden md:flex items-center space-x-4">
-              <div className="flex items-center">
-                <img 
-                  src="/logo.png" 
-                  alt="Bistec Logo" 
-                  className="h-8 w-auto mr-2"
-                />
-                <h1 className="text-lg font-semibold text-white">
-                  {settings.systemName}
+            {/* Logo and System Name */}
+            <div className="flex items-center space-x-2">
+              {/* Logo */}
+              <img
+                src="/logo.png"
+                alt="Bistec Global Logo"
+                className="h-8 w-auto"
+              />
+              {/* System Name */}
+              <div className="flex flex-col">
+                <h1 className="text-lg font-semibold text-gray-300">
+                  Performance
                 </h1>
+                <span className="text-xs text-gray-400">Management System</span>
               </div>
             </div>
           </div>
+          {/* Right side: Notification Bell and User Menu */}
           <div className="flex items-center space-x-4">
-          <ClientTimeDisplay />
-
+            {/* Notification Bell */}
             <button className="text-gray-400 hover:text-white">
-              
               <BsBell className="w-6 h-6" />
             </button>
+            {/* User Menu */}
             <div className="relative" ref={userMenuRef}>
               <button 
                 onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}

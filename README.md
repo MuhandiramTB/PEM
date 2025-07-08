@@ -1,6 +1,6 @@
-# Performance Management System
+# Bistec AspireHub
 
-A comprehensive performance management system built with Next.js, Prisma, and PostgreSQL.
+A comprehensive Bistec AspireHub built with Next.js, Prisma, and PostgreSQL.
 
 ## Features
 
@@ -21,12 +21,14 @@ A comprehensive performance management system built with Next.js, Prisma, and Po
 ### Installation
 
 1. Clone the repository:
+
    ```bash
    git clone https://github.com/yourusername/performance-management-system.git
    cd performance-management-system
    ```
 
 2. Install dependencies:
+
    ```bash
    npm install
    ```
@@ -42,11 +44,13 @@ A comprehensive performance management system built with Next.js, Prisma, and Po
 #### Using Docker (Recommended)
 
 1. Start the database and pgAdmin:
+
    ```bash
    scripts\db-manage.bat start
    ```
 
 2. Access pgAdmin at http://localhost:5050
+
    - Login with admin@example.com / admin
    - Add a new server with these settings:
      - Host: postgres
@@ -74,6 +78,7 @@ A comprehensive performance management system built with Next.js, Prisma, and Po
 ### Running the Application
 
 1. Start the development server:
+
    ```bash
    npm run dev
    ```
@@ -100,6 +105,55 @@ The `scripts\db-manage.bat` script provides several commands for managing the Do
 - Manager: manager@example.com / manager123
 - Employee: employee@example.com / employee123
 
+## Deploying Infrastructure with Pulumi on Azure
+
+### Prerequisites
+
+- [Pulumi CLI](https://www.pulumi.com/docs/get-started/install/) installed
+- Azure account and access to create resources
+- Azure CLI installed and logged in (`az login`)
+- Node.js and npm installed
+
+### Steps
+
+1. **Install dependencies:**
+   ```sh
+   cd infra
+   npm install
+   ```
+2. **Login to Pulumi:**
+   ```sh
+   pulumi login
+   ```
+3. **Set up your stack:**
+   ```sh
+   pulumi stack init <stack-name>
+   ```
+   Replace `<stack-name>` with your environment (e.g., `dev`, `prod`).
+4. **Configure Azure credentials:**
+   Pulumi uses your Azure CLI credentials by default. Ensure you are logged in with `az login`.
+5. **Configure stack variables:**
+   ```sh
+   pulumi config set azure:location <location>
+   pulumi config set dbAdminUser <db-admin-username>
+   pulumi config set dbAdminPassword <db-admin-password> --secret
+   ```
+   Adjust variable names as needed for your stack.
+6. **Preview the deployment:**
+   ```sh
+   pulumi preview
+   ```
+7. **Deploy infrastructure:**
+   ```sh
+   pulumi up
+   ```
+8. **Destroy infrastructure:**
+   ```sh
+   pulumi destroy
+   ```
+
+For more details, see the `infra/README.md` or Pulumi documentation.
+
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+This project is licensed under the MIT License - see the LICENSE file for details.

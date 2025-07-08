@@ -1,5 +1,6 @@
 import { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
+import AzureADProvider from 'next-auth/providers/azure-ad';
 import { prisma } from './prisma';
 import bcrypt from 'bcryptjs';
 import { cookies } from 'next/headers';
@@ -10,7 +11,7 @@ declare module 'next-auth' {
     id: string;
     email: string;
     name: string;
-    role: string;
+    role: Role;
   }
   interface Session {
     user: User;
@@ -20,12 +21,117 @@ declare module 'next-auth' {
 declare module 'next-auth/jwt' {
   interface JWT {
     id: string;
-    role: string;
+    role: Role;
   }
+}
+
+export type Role = 'ADMIN' | 'MANAGER' | 'EMPLOYEE';
+
+export interface User {
+  id: string;
+  email: string;
+  name: string;
+  role: Role;
 }
 
 export const authOptions: NextAuthOptions = {
   providers: [
+    AzureADProvider({
+      clientId: process.env.AZURE_AD_CLIENT_ID!,
+      clientSecret: process.env.AZURE_AD_CLIENT_SECRET!,
+      tenantId: process.env.AZURE_AD_TENANT_ID,
+      authorization: {
+        params: {
+          scope: "openid profile email offline_access",
+          response_type: "code",
+          prompt: "select_account"
+        }
+      },
+      profile: async (profile, tokens) => {
+        console.log('[Azure AD] Processing profile:', {
+          email: profile.email,
+          name: profile.name,
+          groups: profile.groups || [],
+          roles: profile.roles || []
+        });
+        
+        // Check if user exists first
+        let existingUser = await prisma.user.findUnique({
+          where: { email: profile.email }
+        });
+
+        // If user exists, don't automatically update their role
+        if (existingUser) {
+          console.log(`[Azure AD] Existing user found:`, {
+            id: existingUser.id,
+            email: existingUser.email,
+            role: existingUser.role
+          });
+          return {
+            id: existingUser.id,
+            name: existingUser.name,
+            email: existingUser.email,
+            role: existingUser.role
+          };
+        }
+
+        // For new users, determine role based on Azure AD groups/roles
+        let role: Role = 'EMPLOYEE';
+        
+        // Check Azure AD groups if available
+        const groups = profile.groups || [];
+        const roles = profile.roles || [];
+        
+        // You can configure these group/role names in your Azure AD
+        const adminGroups = ['Admins', 'Administrators', 'AspireHub Admins'];
+        const managerGroups = ['Managers', 'Team Leads', 'AspireHub Managers'];
+        
+        // Check if user is admin based on email domain or other criteria
+        if (profile.email.endsWith('@bistecglobal.com')) {
+          role = 'ADMIN';
+          console.log(`[Azure AD] Assigning ADMIN role to bistecglobal.com email: ${profile.email}`);
+        } else if (
+          groups.some((group: string) => adminGroups.includes(group)) ||
+          roles.includes('Admin')
+        ) {
+          role = 'ADMIN';
+          console.log(`[Azure AD] Assigning ADMIN role based on groups/roles: ${profile.email}`);
+        } else if (
+          groups.some((group: string) => managerGroups.includes(group)) ||
+          roles.includes('Manager')
+        ) {
+          role = 'MANAGER';
+          console.log(`[Azure AD] Assigning MANAGER role based on groups/roles: ${profile.email}`);
+        } else {
+          console.log(`[Azure AD] Assigning default EMPLOYEE role: ${profile.email}`);
+        }
+        
+        console.log(`[Azure AD] Creating new user with role: ${role}`);
+        
+        // Create new user with determined role
+        const user = await prisma.user.create({
+          data: {
+            email: profile.email,
+            name: profile.name,
+            password: 'azure-ad-auth', // Placeholder for Azure AD users
+            role: role,
+          },
+        });
+
+        console.log(`[Azure AD] New user created:`, {
+          id: user.id,
+          email: user.email,
+          role: user.role
+        });
+        
+        return {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role
+        };
+      }
+    }),
     CredentialsProvider({
       name: 'credentials',
       credentials: {
@@ -71,28 +177,103 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
   callbacks: {
+    async signIn({ user, account, profile }) {
+      if (account?.provider === 'azure-ad') {
+        // For Azure AD, we've already handled user creation in the profile callback
+        // Just fetch the latest user data to ensure we have the correct role
+        const dbUser = await prisma.user.findUnique({
+          where: { email: user.email },
+        });
+        
+        if (!dbUser) {
+          console.error('User not found in database after Azure AD login');
+          return false;
+        }
+        
+        // Update the user object with the latest data from the database
+        user.id = dbUser.id;
+        user.role = dbUser.role;
+        
+        console.log(`[signIn] User logged in with role: ${user.role}`);
+      }
+      return true;
+    },
     async jwt({ token, user }) {
       if (user) {
         token.id = user.id;
-        token.email = user.email;
-        token.name = user.name;
         token.role = user.role;
+        
+        // Always fetch the latest role from the database
+        if (user.email) {
+          try {
+            const dbUser = await prisma.user.findUnique({
+              where: { email: user.email },
+              select: { role: true }
+            });
+            
+            if (dbUser) {
+              token.role = dbUser.role;
+              console.log(`[jwt] Updated token role from database: ${dbUser.role}`);
+            }
+          } catch (error) {
+            console.error('[jwt] Error fetching user role from database:', error);
+          }
+        }
       }
       return token;
     },
     async session({ session, token }) {
       if (session.user) {
-        session.user.id = token.id as string;
-        session.user.email = token.email as string;
-        session.user.name = token.name as string;
-        session.user.role = token.role as string;
+        console.log('[session] Initial session data:', {
+          email: session.user.email,
+          role: session.user.role
+        });
+        console.log('[session] Token data:', {
+          id: token.id,
+          role: token.role
+        });
+
+        // Ensure the session user has the correct type
+        const sessionUser = session.user as User & { role?: Role };
+        
+        // Update session with token data
+        sessionUser.id = token.id as string;
+        sessionUser.role = token.role as Role;
+        
+        // Always fetch the latest role from the database
+        try {
+          const dbUser = await prisma.user.findUnique({
+            where: { email: sessionUser.email },
+            select: { role: true, id: true }
+          });
+          
+          if (dbUser) {
+            sessionUser.id = dbUser.id;
+            sessionUser.role = dbUser.role;
+            console.log(`[session] Updated session with database values:`, {
+              id: dbUser.id,
+              role: dbUser.role,
+              email: sessionUser.email
+            });
+          } else {
+            console.error(`[session] User not found in database: ${sessionUser.email}`);
+          }
+        } catch (error) {
+          console.error('[session] Error fetching user data from database:', error);
+        }
+
+        console.log('[session] Final session data:', {
+          id: sessionUser.id,
+          email: sessionUser.email,
+          role: sessionUser.role
+        });
       }
       return session;
     },
   },
   pages: {
     signIn: '/login',
-    error: '/login',
+    error: '/error',
     newUser: '/register',
   },
   session: {
@@ -101,15 +282,27 @@ export const authOptions: NextAuthOptions = {
   },
   cookies: {
     sessionToken: {
-      name: `next-auth.session-token`,
+      name: `__Secure-next-auth.session-token`,
       options: {
         httpOnly: true,
         sameSite: 'lax',
         path: '/',
         secure: process.env.NODE_ENV === 'production',
-        domain: process.env.NODE_ENV === 'development' ? 'localhost' : undefined
       }
     }
+  },
+  logger: {
+    error(code, ...message) {
+      console.error(code, message);
+    },
+    warn(code, ...message) {
+      console.warn(code, message);
+    },
+    debug(code, ...message) {
+      if (process.env.NODE_ENV === 'development') {
+        console.debug(code, message);
+      }
+    },
   },
   secret: process.env.NEXTAUTH_SECRET,
   debug: process.env.NODE_ENV === 'development',
